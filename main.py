@@ -18,6 +18,7 @@ import time
 from models.youtube import get_latest_video
 from utils.youtube_checker import start_youtube_check
 from datetime import datetime
+from models.message_log import MessageLog
 
 # --------------------------------
 # 初期化
@@ -91,28 +92,65 @@ def keep_alive():
     thread = Thread(target=run_flask)
     thread.start()
 
-# ====== 起動時処理 ======
+# ====== 起動時処理（on_ready） ======
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     activity = discord.CustomActivity(name="いたずら中😈")
     await bot.change_presence(activity=activity)
+
+    session = Session()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            print(f"📥 {channel.name} の履歴を取得中...")
+            try:
+                async for message in channel.history(limit=None, oldest_first=True):
+                    if not session.query(MessageLog).get(str(message.id)):
+                        log = MessageLog(
+                            message_id=str(message.id),
+                            channel_id=str(channel.id),
+                            author_id=str(message.author.id),
+                            content=message.content or "(本文なし・添付のみ)",
+                            created_at=message.created_at
+                        )
+                        session.add(log)
+                session.commit()
+                print(f"✅ {channel.name} の履歴を保存しました")
+            except Exception as e:
+                print(f"⚠️ {channel} の履歴取得に失敗: {e}")
+    session.close()
+
     try:
         synced = await bot.tree.sync()
         print(f"🔄 Synced {len(synced)} slash commands.")
     except Exception as e:
         print(f"❌ Slash command sync failed: {e}")
+
     start_youtube_check(bot)
 
 # ====== Nerf処理用メモリ保持 ======
 nerfed_users = set()
 
-# ====== メッセージ投稿防止 + ログ転送 ======
+# ====== メッセージ投稿ログ（DB保存込み） ======
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
+    session = Session()
+    if not session.query(MessageLog).get(str(message.id)):
+        log = MessageLog(
+            message_id=str(message.id),
+            channel_id=str(message.channel.id),
+            author_id=str(message.author.id),
+            content=message.content or "(本文なし・添付のみ)",
+            created_at=message.created_at
+        )
+        session.add(log)
+        session.commit()
+    session.close()
+
+    # Nerf / ログ転送処理は既存コードをそのまま残す
     if message.author.id in nerfed_users:
         try:
             await message.delete()
@@ -121,7 +159,6 @@ async def on_message(message):
             print("⚠️ メッセージ削除できません（パーミッション不足）")
         return
 
-    # ✅ ログチャンネルに転送（自身のログは除外）
     if message.channel.id != LOG_CHANNEL_ID:
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
@@ -137,13 +174,13 @@ async def on_message_edit(before, after):
     if before.author.bot or before.content == after.content:
         return
 
-    if before.author.id in nerfed_users:
-        try:
-            await after.delete()
-            print(f"✏️ Nerfed user {after.author} の編集済メッセージを削除しました。")
-        except discord.Forbidden:
-            print("⚠️ 編集済みメッセージ削除できません")
-        return
+    session = Session()
+    log = session.query(MessageLog).get(str(before.id))
+    if log:
+        log.content = after.content
+        log.edited_at = datetime.utcnow()
+        session.commit()
+    session.close()
 
     if before.channel.id != LOG_CHANNEL_ID:
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
@@ -158,12 +195,19 @@ async def on_message_edit(before, after):
 # ====== メッセージ削除ログ ======
 @bot.event
 async def on_message_delete(message):
-    if message.channel.id != LOG_CHANNEL_ID and not message.author.bot:
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(
-                f"🗑️ **#{message.channel.name}** にて {message.author.display_name} のメッセージが削除されました:\n> {message.content}"
-            )
+    if message.author.bot:
+        return
+
+    session = Session()
+    log = session.query(MessageLog).get(str(message.id))
+    session.close()
+
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        content = log.content if log else message.content or "(内容不明)"
+        await log_channel.send(
+            f"🗑️ **#{message.channel.name}** にて {message.author.display_name} のメッセージが削除されました:\n> {content}"
+        )
 
 # ====== リアクション禁止 + ログ転送 ======
 @bot.event
