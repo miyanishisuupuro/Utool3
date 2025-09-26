@@ -1,14 +1,20 @@
-# Discord関連
+# Discord Bot
 discord.py>=2.3.2
 
-# データベース（SQLite + ORM）
+# データベース
 sqlalchemy>=1.4
 
-# 実行時の非同期処理に必要なもの（通常Python標準でOK）
-# asyncio（標準ライブラリなので書かなくてOK）
-feedparser
+# YouTube RSS
+feedparser>=6.0.11
 
+# 非同期関連
 nest-asyncio>=1.5.6
+
+# 環境変数
 python-dotenv>=1.0.0
+
+# Web サーバー
 Flask>=2.3.2
+
+# HTTP リクエスト
 requests>=2.31.0
