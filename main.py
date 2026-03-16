@@ -39,10 +39,10 @@ data_manager = DataManager(bot, DATA_CHANNEL_ID)
 @bot.event
 async def on_ready():
     await data_manager.load_files()
-    utility.register_utility_commands(bot)
-    fun.register_fun_commands(bot)
+    # utility.register_utility_commands(bot)
+    # fun.register_fun_commands(bot)
     reminder.register_reminder_commands(bot, data_manager)
-    todo.register_todo_commands(bot, data_manager)
+    # todo.register_todo_commands(bot, data_manager)
 
     await bot.tree.sync()
     print(f"Logged in as {bot.user}")
