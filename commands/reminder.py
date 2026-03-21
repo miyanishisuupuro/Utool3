@@ -1,4 +1,3 @@
-# commands/reminder.py
 from discord import app_commands, ui
 import discord
 import asyncio
@@ -8,12 +7,10 @@ import requests
 from datetime import datetime, timezone, timedelta
 import re
 
-# --- 設定項目 ---
 JST = timezone(timedelta(hours=9))
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
-# 天気予報用コード変換
 WEATHER_CODES = {
     0: "☀️快晴", 1: "🌤️晴れ", 2: "⛅くもり", 3: "☁️曇り",
     45: "🌫️霧", 48: "🌫️霧", 51: "🚿小雨", 53: "🚿小雨", 55: "🚿小雨",
@@ -21,22 +18,17 @@ WEATHER_CODES = {
     80: "🌦️にわか雨", 81: "🌦️にわか雨", 82: "🌦️激しいにわか雨", 95: "⚡雷雨"
 }
 
-# --- ヘルパー関数 ---
-
 def parse_extended_datetime(date_str, time_str):
-    """'25:30' などの表記を解釈し、翌日の '01:30' として datetime を返す"""
     base_dt = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=JST)
     time_str = time_str.replace('.', ':')
     match = re.match(r"(\d{1,2}):(\d{2})", time_str)
     if not match:
-        raise ValueError("時間形式エラー")
+        raise ValueError("時間の形式が正しくありません")
     hours, minutes = map(int, match.groups())
     return base_dt + timedelta(days=(hours // 24)) + timedelta(hours=(hours % 24), minutes=minutes)
 
 def get_weather():
-    """Open-Meteo APIから【宮崎】の天気を取得して辞書形式で返す"""
     try:
-        # 宮崎の座標: latitude=31.91, longitude=131.42
         url = "https://api.open-meteo.com/v1/forecast?latitude=31.9111&longitude=131.4239&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo"
         r = requests.get(url).json()
         forecast = {}
@@ -45,8 +37,6 @@ def get_weather():
         return forecast
     except:
         return {}
-
-# --- Google Calendar 操作クラス ---
 
 class GoogleCalendarManager:
     def __init__(self):
@@ -64,16 +54,28 @@ class GoogleCalendarManager:
             self.service = None
 
     def add_event(self, calendar_id, title, date_str, start_time_str=None, end_time_str=None):
-        if not self.service: return
+        if not self.service: 
+            raise Exception("Google Calendar APIの初期化に失敗しています。")
+        
         if start_time_str:
             s_dt = parse_extended_datetime(date_str, start_time_str)
             if end_time_str:
                 e_dt = parse_extended_datetime(date_str, end_time_str)
                 if e_dt <= s_dt: e_dt += timedelta(days=1)
-            else: e_dt = s_dt + timedelta(hours=1)
-            body = {'summary': title, 'start': {'dateTime': s_dt.isoformat(), 'timeZone': 'Asia/Tokyo'}, 'end': {'dateTime': e_dt.isoformat(), 'timeZone': 'Asia/Tokyo'}}
+            else: 
+                e_dt = s_dt + timedelta(hours=1)
+            body = {
+                'summary': title,
+                'start': {'dateTime': s_dt.isoformat(), 'timeZone': 'Asia/Tokyo'},
+                'end': {'dateTime': e_dt.isoformat(), 'timeZone': 'Asia/Tokyo'}
+            }
         else:
-            body = {'summary': title, 'start': {'date': date_str}, 'end': {'date': (datetime.strptime(date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')}}
+            body = {
+                'summary': title,
+                'start': {'date': date_str},
+                'end': {'date': (datetime.strptime(date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')}
+            }
+        # ここで発生するエラーをそのまま上位に投げる
         return self.service.events().insert(calendarId=calendar_id, body=body).execute()
 
     def get_events(self, calendar_id, days=7):
@@ -85,8 +87,6 @@ class GoogleCalendarManager:
             res = self.service.events().list(calendarId=calendar_id, timeMin=time_min, timeMax=time_max, singleEvents=True, orderBy='startTime').execute()
             return res.get('items', [])
         except: return []
-
-# --- UIパーツ ---
 
 class UniversalAddModal(ui.Modal, title="予定の登録"):
     date_input = ui.TextInput(label="日付 (YYYY-MM-DD)", placeholder="2026-03-20")
@@ -102,9 +102,20 @@ class UniversalAddModal(ui.Modal, title="予定の登録"):
     async def on_submit(self, it: discord.Interaction):
         await it.response.defer(ephemeral=True)
         try:
-            self.gcal.add_event(self.cid, self.title_input.value, self.date_input.value, self.start_input.value or None, self.end_input.value or None)
-            await it.followup.send(f"✅ **{self.title_input.value}** を登録しました！", ephemeral=True)
-        except: await it.followup.send("❌ 形式を確認してください（例: 25:30）", ephemeral=True)
+            date_val = self.date_input.value.strip()
+            title_val = self.title_input.value.strip()
+            start_val = self.start_input.value.strip() or None
+            end_val = self.end_input.value.strip() or None
+
+            self.gcal.add_event(self.cid, title_val, date_val, start_val, end_val)
+            await it.followup.send(f"✅ **{title_val}** を登録しました！", ephemeral=True)
+        except Exception as e:
+            # エラーの詳細をユーザーに伝える
+            err_text = str(e)
+            if "403" in err_text or "not found" in err_text.lower():
+                await it.followup.send("❌ カレンダーへのアクセス権限がありません。サービスアカウントのメールアドレスをカレンダーの設定から共有してください。", ephemeral=True)
+            else:
+                await it.followup.send(f"❌ 登録失敗: `{err_text[:100]}`", ephemeral=True)
 
 class ReminderMenuView(ui.View):
     def __init__(self, gcal, dm):
@@ -114,6 +125,7 @@ class ReminderMenuView(ui.View):
     @ui.button(label="➕ カレンダーから追加", style=discord.ButtonStyle.success, emoji="📆")
     async def quick_add(self, it: discord.Interaction, button: ui.Button):
         cid = self.dm.get_guild_data(it.guild_id).get("google_calendar_id")
+        if not cid: return await it.response.send_message("先に `/rem on` で設定をしてください。", ephemeral=True)
         view = ui.View()
         select = ui.Select(placeholder="日付を選択...")
         now = datetime.now(JST)
@@ -131,12 +143,15 @@ class ReminderMenuView(ui.View):
     @ui.button(label="🚀 日付を指定して追加", style=discord.ButtonStyle.secondary, emoji="📅")
     async def manual_add(self, it: discord.Interaction, button: ui.Button):
         cid = self.dm.get_guild_data(it.guild_id).get("google_calendar_id")
+        if not cid: return await it.response.send_message("先に `/rem on` で設定をしてください。", ephemeral=True)
         await it.response.send_modal(UniversalAddModal(self.gcal, cid))
 
     @ui.button(label="🔍 予定を確認", style=discord.ButtonStyle.primary, emoji="📋")
     async def list_events(self, it: discord.Interaction, button: ui.Button):
         await it.response.defer(ephemeral=True)
         cid = self.dm.get_guild_data(it.guild_id).get("google_calendar_id")
+        if not cid: return await it.followup.send("設定が未完了です。", ephemeral=True)
+        
         events = self.gcal.get_events(cid, days=7)
         weather = get_weather()
         if not events: return await it.followup.send("✨ 予定はありません。", ephemeral=True)
@@ -180,12 +195,12 @@ class ReminderMenuView(ui.View):
                     await sit.response.send_message(f"❌ 削除失敗。理由: `{str(e)[:50]}`", ephemeral=True)
         await it.response.send_modal(DelModal(self.gcal, cid))
 
-# --- コマンド登録・ループ ---
 def register_reminder_commands(bot, data_manager):
     gcal = GoogleCalendarManager()
 
     class Reminder(app_commands.Group):
         def __init__(self): super().__init__(name="rem", description="カレンダー管理")
+        
         @app_commands.command(name="menu", description="操作パネルを表示")
         async def menu(self, it: discord.Interaction):
             now = datetime.now(JST)
@@ -207,6 +222,7 @@ def register_reminder_commands(bot, data_manager):
         reminded_ids = set()
         while not bot.is_closed():
             now = datetime.now(JST)
+            # 毎朝6時に天報と予定を通知
             if now.hour == 6 and now.minute == 0:
                 weather = get_weather()
                 for gid, gdata in data_manager.data.items():
@@ -222,6 +238,7 @@ def register_reminder_commands(bot, data_manager):
                             await ch.send(embed=emb)
                 await asyncio.sleep(60)
 
+            # 10分前のリマインダー通知
             for gid, gdata in data_manager.data.items():
                 r = gdata.get("reminder", {})
                 if r.get("enabled"):
